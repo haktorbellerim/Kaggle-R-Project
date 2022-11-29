@@ -1,0 +1,592 @@
+---
+title: "R Kaggle Competition Report"
+author: "G2 Group 4 - Callista Kan, Fong Jun Hao, Joel Ang, Lim Shi Hao, Nur Hakim Bin Zahrin"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    number_sections: yes
+    theme: readable
+    toc: yes
+---
+
+```{r global-options, echo = FALSE, message = FALSE}
+knitr::opts_chunk$set(warning = FALSE, 
+                      fig.height = 6,
+                      fig.width = 6,
+                      fig.align = "center")
+```
+
+# Loading and Exploring the Data Set
+
+Import and read the train and test data sets.
+
+```{r}
+train = read.csv("Competition_Train.csv")
+test = read.csv("Competition_Test.csv")
+str(train)
+str(test)
+```
+
+Importing the relevant packages for analysis.
+
+```{r}
+library(caret)
+library(e1071)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(car)
+library(lattice)
+```
+
+Changing the categorical variables from integer to factor on both train and test sets. 
+
+```{r}
+train$potential_issue = as.factor(train$potential_issue)
+train[18:23] = lapply(train[18:23], as.factor)
+str(train)
+test$potential_issue = as.factor(test$potential_issue)
+test[18:22] = lapply(test[18:22], as.factor)
+str(test)
+```
+
+We need to change the level labels since we want to use AUC as the performance measure in cross-validation.
+
+```{r}
+library(plyr)
+train$potential_issue = revalue(train$potential_issue, c("0"="No", "1"="Yes"))
+train[18:23] = lapply(train[18:23], function(x) revalue(x, c("0"="No", "1"="Yes")))
+str(train)
+test$potential_issue = revalue(test$potential_issue, c("0"="No", "1"="Yes"))
+test[18:22] = lapply(test[18:22], function(x) revalue(x, c("0"="No", "1"="Yes")))
+str(test)
+```
+
+We first analysed the number of SKUs that went into backorder in the train set to check whether the data set was skewed. Findings showed that less than 12% of the SKUs in the train set went on backorder, signalling a heavily unbalanced train set. 
+
+```{r}
+table(train['went_on_backorder'])
+x <-  c(49624,9295)
+barplot(x,width = 1, main= "Bar Chart", ylab= "Went on Backorder",names.arg= c("No","Yes"),col="blue")
+```
+
+Considering the skewed data set given to us, we first look to analyse the skewness of the individual independent variables.
+
+```{r}
+skewness(train$national_inv, na.rm = TRUE)
+skewness(train$lead_time , na.rm = TRUE)
+skewness(train$in_transit_qty, na.rm = TRUE)
+skewness(train$forecast_3_month , na.rm = TRUE)
+skewness(train$forecast_6_month , na.rm = TRUE)
+skewness(train$forecast_9_month , na.rm = TRUE)
+skewness(train$sales_1_month, na.rm = TRUE)
+skewness(train$sales_3_month , na.rm = TRUE)
+skewness(train$sales_6_month , na.rm = TRUE)
+skewness(train$sales_9_month, na.rm = TRUE)
+skewness(train$min_bank , na.rm = TRUE)
+skewness(train$pieces_past_due, na.rm = TRUE)
+skewness(train$perf_6_month_avg , na.rm = TRUE)
+skewness(train$perf_12_month_avg , na.rm = TRUE)
+skewness(train$local_bo_qty , na.rm = TRUE)
+```
+
+We plotted histograms to visualise the skewness on certain independent variables and reaffirm our findings above.
+
+```{r}
+train %>%
+  ggplot(aes(in_transit_qty)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train %>%
+  ggplot(aes(forecast_3_month)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train %>%
+  ggplot(aes(sales_1_month)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train %>%
+  ggplot(aes(min_bank)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train %>%
+  ggplot(aes(pieces_past_due)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train %>%
+  ggplot(aes(local_bo_qty)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+```
+
+## Normalizing the train and test sets
+
+Since skewed data may act as outliers and affect our model’s performance later, we decided to normalize the train and test sets to spread the data out more evenly and make our data more constant in variance. We used the formula *x = log (x + 1)* to transform our right-skewed data to make it more left-skewed, while also including zero values.  
+
+```{r}
+library(dplyr)
+train_log <- train %>% 
+  mutate(
+          lead_time = log(lead_time+1),
+          in_transit_qty = log(in_transit_qty+1),
+          forecast_3_month = log(forecast_3_month+1),
+          forecast_6_month = log(forecast_6_month+1), 
+          forecast_9_month = log(forecast_9_month+1),
+          sales_1_month = log(sales_1_month+1),
+          sales_3_month = log(sales_3_month+1),
+          sales_6_month = log(sales_6_month+1),
+          sales_9_month = log(sales_9_month+1), 
+          min_bank = log(min_bank+1), 
+          pieces_past_due = log(pieces_past_due+1),
+          perf_6_month_avg = log(perf_6_month_avg+1),
+          perf_12_month_avg = log(perf_12_month_avg+1),
+          local_bo_qty = log(local_bo_qty+1)
+)
+
+test_log <- test %>%
+  mutate(
+          lead_time = log(lead_time+1),
+          in_transit_qty = log(in_transit_qty+1),
+          forecast_3_month = log(forecast_3_month+1),
+          forecast_6_month = log(forecast_6_month+1), 
+          forecast_9_month = log(forecast_9_month+1),
+          sales_1_month = log(sales_1_month+1),
+          sales_3_month = log(sales_3_month+1),
+          sales_6_month = log(sales_6_month+1),
+          sales_9_month = log(sales_9_month+1), 
+          min_bank = log(min_bank+1), 
+          pieces_past_due = log(pieces_past_due+1),
+          perf_6_month_avg = log(perf_6_month_avg+1),
+          perf_12_month_avg = log(perf_12_month_avg+1),
+          local_bo_qty = log(local_bo_qty+1)
+  )
+```
+
+After normalizing the data set, we observed significant drops in skewness values across all the independent variables. 
+
+```{r}
+skewness(train_log$national_inv, na.rm = TRUE)
+skewness(train_log$lead_time , na.rm = TRUE)
+skewness(train_log$in_transit_qty, na.rm = TRUE)
+skewness(train_log$forecast_3_month , na.rm = TRUE)
+skewness(train_log$forecast_6_month , na.rm = TRUE)
+skewness(train_log$forecast_9_month , na.rm = TRUE)
+skewness(train_log$sales_1_month, na.rm = TRUE)
+skewness(train_log$sales_3_month , na.rm = TRUE)
+skewness(train_log$sales_6_month , na.rm = TRUE)
+skewness(train_log$sales_9_month, na.rm = TRUE)
+skewness(train_log$min_bank , na.rm = TRUE)
+skewness(train_log$pieces_past_due, na.rm = TRUE)
+skewness(train_log$perf_6_month_avg , na.rm = TRUE)
+skewness(train_log$perf_12_month_avg , na.rm = TRUE)
+skewness(train_log$local_bo_qty , na.rm = TRUE)
+```
+
+We then re-visualised the histogram plots to see the difference in skewness.
+
+```{r}
+train_log %>%
+  ggplot(aes(in_transit_qty)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train_log %>%
+  ggplot(aes(forecast_3_month)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train_log %>%
+  ggplot(aes(sales_1_month)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train_log %>%
+  ggplot(aes(min_bank)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train_log %>%
+  ggplot(aes(pieces_past_due)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+
+train_log %>%
+  ggplot(aes(local_bo_qty)) +
+  geom_histogram(bins=20) +
+  theme_gray()
+```
+
+# Logistic Regression Models
+
+In this demonstration, we will be comparing across 5 logistic regression models, all with different parameters. We will use $k$-fold cross-validation to compare the performance of these five models. To carry out the cross-validation for our logistic regression models, we are going to use 2 packages, "caret" and "e1071".
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+library(caret)
+library(e1071)
+```
+
+First, we will define our cross-validation experiment. The first argument, *method = "cv"*, tells the function to use the cross-validation method. The additional arguments are necessary since we want to use AUC as the performance measure in cross-validation.
+
+```{r}
+fitControl = trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary)
+```
+
+## Model 1 - unnormalised data, all independent variables bar SKU
+Now, we are ready to perform cross-validation. Since there is some random component in $k$-fold cross-validation---random partition into $k$ folds---we can synchronize the results by setting a common random seed first. Our group has decided to use a seed value of 7, and will be using this same value throughout for all models to ensure that the difference in cross-validation performance is not due to the $k$-fold random partition. After running the first model which runs on the data set that is not normalized and includes all the independent variables bar "sku", we achieved an ROC = **0.8243463** and Kaggle public score = **0.82860**. 
+
+```{r}
+set.seed(7)
+train(went_on_backorder ~ . - sku, data = train, method = "glm", family = "binomial", trControl = fitControl, metric = "ROC")
+
+model1 = glm(went_on_backorder ~ . - sku, data = train, family = "binomial")
+summary(model1)
+```
+
+## Model 2 - normalised data, all significant independent variables
+Our second model takes reference from model 1, but now using the normalized train set and removing the insignificant variables (p > 0.05) from the normalized train set which include "forecast_9_month", "sales_6_month", "sales_9_month", "potential_issue", "perf_12_month_avg", "oe_constraint", "rev_stop". After running the second model, we achieved an ROC = **0.8919156** and Kaggle public score = **0.89832**.
+
+```{r}
+set.seed(7)
+
+model2_log = glm(went_on_backorder ~ . - sku, data = train_log, family = "binomial")
+summary(model2_log)
+```
+
+```{r}
+set.seed(7)
+train(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + local_bo_qty + deck_risk + ppap_risk + stop_auto_buy, data = train_log, method = "glm", family = "binomial", trControl = fitControl, metric = "ROC")
+
+model2 = glm(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + local_bo_qty + deck_risk + ppap_risk + stop_auto_buy, data = train_log, family = "binomial")
+summary(model2)
+```
+
+## Model 3 - normalised data, inclusion of interaction variable
+To improve our model's performance, we looked at the possibility of adding **interaction variables**. We then analyzed possible interactions among different combinations of independent variables that could affect and improve the prediction of our model. After many iterations, we found that the interaction effect between "national_inv" and "sales_3_month" gives us the best ROC score = **0.9140569** and Kaggle public score = **0.91911**.
+
+```{r}
+set.seed(7)
+train(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + local_bo_qty + deck_risk + ppap_risk + stop_auto_buy + national_inv*sales_3_month, data = train_log, method = "glm", family = "binomial", trControl = fitControl, metric = "ROC")
+
+model3 = glm(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + local_bo_qty + deck_risk + ppap_risk + stop_auto_buy + national_inv*sales_3_month, data = train_log, family = "binomial")
+summary(model3)
+```
+
+## Model 4 - normalised data, removal of more insignificant variables, inclusion of new interaction variable
+After running the 3rd model, we observed a few insignificant variables ("stop_auto_buyYes" and "local_bo_qty") and decided to remove them in our 4th model. We tried testing different interaction variables to see whether there would be any significant impacts to our model's performance. After running, we achieved an ROC = **0.8413917** and Kaggle public score = **0.91902** which was worse than our 3rd model. As such, we decided to revert back to our previous interaction variable of "national_inv*sales_3_month". 
+
+```{r}
+set.seed(7)
+train(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + deck_risk + ppap_risk + national_inv*sales_1_month, data = train_log, method = "glm", family = "binomial", trControl = fitControl, metric = "ROC")
+
+model4 = glm(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + deck_risk + ppap_risk + national_inv*sales_1_month, data = train_log, family = "binomial")
+summary(model4)
+```
+
+### Understanding the chosen interaction variable
+To better understand our reason for choosing "national_inv*sales_3_month", we decided to plot the interaction effect. Through domain knowledge, it is intuitive that sales would have a direct relationship with the inventory numbers. For example, higher sales would prompt business requirements to have higher inventory to capture more sales for a particular SKU. 
+
+Considering sales_1_month or sales_3_month for the interaction effect (since sales_6_month and sales_9_month are insignificant), we plotted both graphs to determine which "sales" variable to use.
+
+For the "sales_1_month" variable plot, one could infer that for all the SKUs that did not go on backorder, their national_inv levels were below approximately 7800, while SKUs that did go on backorder had an increasing growth of national_inv levels that did not taper off.
+
+```{r}
+#  Higher Sales -> Higher inventory -> Higher Backorders.
+ggplot(data = train, aes(x = sales_1_month, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+```
+Furthermore, for the "sales_3_month" variable plot, one could infer that for all the SKUs that did not go on backorder, their national_inv levels were below 7500, while SKUs that did go on backorder had an increasing growth of national_inv levels that did not taper off. 
+As such, we tested both "sales_1_month" and "sales_3_month" to understand their respective prediction effects on "went_on_backorder" in the logistic regression models. 
+
+```{r}
+ggplot(data = train, aes(x = sales_3_month, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+```
+However, due to the normalization log(x + 1), the predictive effect of sales_3_month and sales_1_month was dampened (as shown below). As such, we included the "national_inv*sales" variables to provide an additional interaction effect to overcome the dampened predictive effect and improve our overall ROC.
+
+Since both interaction effect are very similar and we discovered that "sales_3_month" gave us a higher ROC compared to sales_1_month, we decided to go ahead with "national_inv*sales_3_month".
+
+```{r}
+ggplot(data = train_log, aes(x = sales_3_month, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+ggplot(data = train_log, aes(x = sales_1_month, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+ggplot(data = train_log, aes(x = sales_3_month*national_inv, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+ggplot(data = train_log, aes(x = sales_1_month*national_inv, y = national_inv)) + geom_smooth(aes(color = went_on_backorder))
+```
+
+## Model 5 - - normalised data, all significant independent variables, inclusion of best interaction variable
+Reverting back to our first interaction effect and removing the insignificant variables, we achieved our best ROC score across all the logistic regression models at **0.9141387** and Kaggle public score = **0.91917**.
+
+```{r}
+set.seed(7)
+train(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + deck_risk + ppap_risk + national_inv*sales_3_month, data = train_log, method = "glm", family = "binomial", trControl = fitControl, metric = "ROC")
+
+model5 = glm(went_on_backorder ~ national_inv + lead_time + in_transit_qty + forecast_3_month + forecast_6_month + sales_1_month + sales_3_month + min_bank + pieces_past_due + perf_6_month_avg + deck_risk + ppap_risk + national_inv*sales_3_month, data = train_log, family = "binomial")
+summary(model5)
+```
+
+## Preparing the Predictions for Testing
+Using the selected model, we make the predictions on the test set and save *sku* and the predicted probabilities of backorder in a data frame.
+
+```{r}
+PredBO = predict(model5, newdata = test_log, type = "response")
+PredTest = data.frame(test_log$sku, PredBO)
+str(PredTest)
+summary(PredTest)
+```
+Finally, we tally the variable names and save the predictions in a file to be submitted to Kaggle.
+
+```{r}
+colnames(PredTest) = c("sku", "went_on_backorder")
+str(PredTest)
+# write.csv(PredTest, "Sample_Submission_LR_Model5.csv", row.names = FALSE)
+```
+
+## Outcome of the Logistic Regression Model
+Across the 5 models we tested, our best logistic regression arises from our last model (model 5) where we achieved an ROC score of **0.9141387** and Kaggle public score = **0.91917**.
+
+
+# CART Model
+
+Importing the necessary packages for CART.
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+library(ggplot2)
+library(lattice)
+library(caret)
+library(e1071)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+```
+
+## Choosing classification tree over regression tree
+Since we are predicting *went_on_backorder* which is a categorical binary variable, we chose to perform a classification tree.
+
+## Using cross-validation to determine the cp value
+To generate the CART model with the highest AUC, we initially explored cp values ranging from 0 through 0.5 with a step size of 0.01. However, the optimal value of cp returned by the algorithm in the CART model was 0. As we understand that cp = 0 is not the most ideal, we reduced the range of cp values and its step size for cross-validation. After running, we were able to achieve an optimal cp value = **0.000013**, using the range of 0 to 0.0001 with a step of 0.000001.
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+fitControl_AUC = trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary)
+cpGrid = expand.grid(.cp=(0:100)*0.000001)
+
+set.seed(7)
+cvResults = train(went_on_backorder ~ . - sku , data = train, method = "rpart", trControl=fitControl_AUC, tuneGrid = cpGrid, metric = "ROC")
+cvResults
+```
+
+## Classification Tree
+Using the optimal cp value of 0.000013, the following classification tree is produced.
+
+```{r}
+BOTreeCV = rpart(went_on_backorder ~ .-sku, data = train, control = rpart.control(cp = cvResults["bestTune"]))
+prp(BOTreeCV, extra=104)
+```
+
+## Preparing the Predictions for Testing
+
+```{r}
+predictCART = predict(BOTreeCV, newdata = test, type = "prob")
+predCART = data.frame(test$sku, predictCART[,2])
+```
+Finally, we tally the variable names and save the predictions in a file to be submitted to Kaggle.
+
+```{r}
+colnames(predCART) = c("sku", "went_on_backorder")
+str(predCART)
+# write.csv(predCART, "Sample_Submission_CART.csv", row.names = FALSE)
+```
+
+## Outcome of the CART Model
+Our CART model produced a Kaggle public score of **0.92099**, an improvement over our previous logistic regression model (model 5). Notwithstanding, the cp value of 0.000013 is very small meaning that a very large tree is created, where almost every data point becomes a leaf node in our classification tree. This results in our tree being difficult to interpret and problems of over-fitting may arise. As such, our group decided that the CART model may not be the most optimal and looked to the other prediction methods.
+
+
+# Random Forest Models
+
+## Model 1
+Firstly, we used the default values for the parameters mtry, nodesize as well as ntree by not assigning them any values.
+
+```{r}
+library(randomForest)
+set.seed(7)
+forest1 = randomForest(went_on_backorder ~ .-sku , data = train)
+pred1 = predict(forest1, newdata = test, type="prob")
+predBase = data.frame(test$sku, pred1[,2])
+```
+Our base model returned a Kaggle public score of **0.96097** which is already higher than that of our previous CART model. Using this base model as a starting point, we decided to change the values of mtry and ntree in order to try and achieve and higher ROC.
+
+```{r}
+colnames(predBase) = c("sku", "went_on_backorder")
+str(predBase)
+#write.csv(predBase, "Sample_Submission_Forest1.csv", row.names = FALSE)
+```
+
+## Reason for only changing mtry and ntree 
+Based on our research, we found that the mtry and ntree parameters would have the biggest effect out of all the other parameters on the model.Thus, we decided to focus on only adjusting these two parameters. 
+
+## Model 2 - ntree = 1200, mtry = 4
+We assumed that since the random forest consists of multiple classification trees, the default "mtry" value would be $\sqrt{22}$ (rounded down to 4) as the number of variables excluding *sku* is 22. For the number of trees, we do not want to have too little trees as some observations can be missed. We first started off with 1200 trees.
+
+```{r}
+set.seed(7)
+forest2 = randomForest(went_on_backorder ~ . - sku, data = train, ntree = 1200, mtry = 4)
+pred2 = predict(forest2, newdata = test, type="prob")
+predModel2 = data.frame(test$sku, pred2[,2])
+```
+
+```{r}
+colnames(predModel2) = c("sku", "went_on_backorder")
+str(predModel2)
+#write.csv(predModel2, "Sample_Submission_Forest2.csv", row.names = FALSE)
+```
+Our 2nd model returned a Kaggle public score of **0.96096** which is slightly lower than the base model's ROC.
+
+## Model 3 - ntree = 2000, mtry = 4
+We decided to increase the number of trees since increasing the number of trees would bring about a better performance through greater aggregation of predictions. We eventually chose 2000 trees. We decided not to further change the mtry value. 
+
+```{r}
+set.seed(7)
+forest3 = randomForest(went_on_backorder ~ . - sku, data = train, ntree = 2000, mtry = 4)
+
+pred3 = predict(forest3, newdata = test, type="prob")
+predModel3 = data.frame(test$sku, pred3[,2])
+```
+
+```{r}
+colnames(predModel3) = c("sku", "went_on_backorder")
+str(predModel3)
+#write.csv(predModel3, "Sample_Submission_Forest3.csv", row.names = FALSE)
+```
+Model 3 returned us a Kaggle public score of **0.96102**, which is higher compared to our previous model and further substantiate our initial assumption that increasing ntree would result in better performance. 
+
+## Model 4 - ntree = 2000, mtry = 5
+From here, we decided to use a new method to re-determine our optimal mtry value. After which, we would use trial and error method to decipher the best combination of mtry and ntree values that would yield us the highest ROC. 
+ 
+To find the optimal mtry value which gives the smallest OOB error for different ntree values, we went on to experiment with the tuneRF code. Our findings are as follow:
+
+For ntree = 500,
+      mtry   OOBError
+3.OOB    3 0.07442421
+4.OOB    4 0.07077513
+**6.OOB    6 0.06846688**
+**9.OOB    9 0.06841596**
+
+For ntree = 1000,
+      mtry   OOBError
+3.OOB    3 0.07350770
+4.OOB    4 0.06996045
+**6.OOB    6 0.06765220**
+9.OOB    9 0.06802559
+
+For ntree = 1200,
+      mtry   OOBError
+3.OOB    3 0.07350770
+4.OOB    4 0.06996045
+**6.OOB    6 0.06765220**
+9.OOB    9 0.06802559
+
+For ntree = 1500,
+      mtry   OOBError
+3.OOB    3 0.07399990
+4.OOB    4 0.07004532
+**6.OOB    6 0.06777101**
+9.OOB    9 0.06800862
+
+For ntree = 2000,
+      mtry   OOBError
+3.OOB    3 0.07388109
+4.OOB    4 0.06992651
+**6.OOB    6 0.06763523**
+**9.OOB    9 0.06792376**
+
+For ntree = 2500,
+      mtry   OOBError
+3.OOB    3 0.07435632
+4.OOB    4 0.06982467
+**6.OOB    6 0.06756734**
+9.OOB    9 0.06770312
+
+As observed from most of the OOB Error Diagram, we can infer that the best mtry for the different ntree values is **about 6**.
+Hence, we will look to test out different random forest model using **mtry = 5 to mtry = 7 (based on the optimal OOB error findings).**
+
+On a side note, we didn't take mtry = 9 because of the minimal effect it has on the OOB error for different ntree values.
+i.e. for ntree = 2000, from mtry = 6 to mtry = 9, OOB error only decrease by 0.00028853. 
+Concurrently, for ntree = 1000, ntree = 1200 and ntree = 1500, OOB error increases from mtry = 6 to mtry = 9 as well.
+
+The code below was used to test out the optimal OOB error. We changed the ntreeTry value from 500 to 2500, to determine the optimal mtry to use:
+
+```{r}
+set.seed(7)
+mtry = tuneRF(train[2:22],train$went_on_backorder, ntreeTry=500, stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.mtry = mtry[mtry[, 2] == min(mtry[, 2]), 1]
+mtry
+best.mtry
+```
+
+```{r}
+set.seed(7)
+mtry = tuneRF(train[2:22],train$went_on_backorder, ntreeTry=2500, stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.mtry = mtry[mtry[, 2] == min(mtry[, 2]), 1]
+mtry
+best.mtry
+```
+Using mtry = 5 to mtry = 7, we utilize the trial and error method with the code below to find the highest ROC. 
+Our findings are as follow:
+
+For mtry = 4:
+  Ntree 500 mtry 4 → 0.96097
+  Ntree 1200 mtry 4 → 0.96096
+  Ntree 2000 mtry 4 → 0.96102
+
+For mtry = 5:
+  Ntree 500 mtry 5 → 0.96093
+  Ntree 1950 mtry 5 → 0.96126
+  Ntree 1990 mtry 5 → 0.96127
+  **Ntree 2000 mtry 5 → 0.96128**
+  Ntree 2100 mtry 5 → 0.96081
+  Ntree 2200 mtry 5 → 0.96081
+  Ntree 2300 mtry 5 → 0.96082
+  Ntree 2400 mtry 5 → 0.96084
+
+For mtry = 6:
+  Ntree 500 mtry 6 → 0.96080
+  Ntree 2000 mtry 6 → 0.96113
+  Ntree 2100 mtry 6 → 0.96094
+  Ntree 2200 mtry 6 → 0.96094 
+  Ntree 2300 mtry 6 → 0.96094
+  Ntree 2400 mtry 6 → 0.96089
+  Ntree 2500 mtry 6 → 0.96112
+
+For mtry = 7:
+  Ntree 500 mtry 7 → 0.96034
+  Ntree 800 mtry 7 → 0.96066
+  Ntree 1200 mtry 7 → 0.96078
+  Ntree 2000 mtry 7 → 0.96076
+  
+We use the ntree = 500 to form a baseline comparison as to which mtry to choose. From there we narrowed down to mtry = 5 and mtry = 6.
+After which, we increased the ntree to 2000. Based on the result of ntree = 2000, we decided to choose mtry = 5.
+
+In addition, we stopped at around ntree = 2500 as it takes too much time to compute the ROC for the different mtry.
+
+```{r}
+set.seed(7)
+forest4 = randomForest(went_on_backorder ~ . - sku, data = train, ntree = 2000, mtry = 5)
+
+pred4 = predict(forest4, newdata = test, type="prob")
+predModel4 = data.frame(test$sku, pred4[,2])
+```
+
+After several more trials, we discovered that mtry = 5 and ntree = 2000 gave us the highest possible ROC score of **0.96128**. 
+
+```{r}
+colnames(predModel4) = c("sku", "went_on_backorder")
+str(predModel4)
+#write.csv(predModel4, "Sample_Submission_Forest2000_5.csv", row.names = FALSE)
+```
+
+## Choosing Random forest model with ntree = 2000 and mtry = 5 as our final model for submission
+The model gave us a Kaggle public score of **0.96128**, which is the highest amongst the logistic regression model, CART, and the other random forests models. Even though we can increase the number of trees to attain a higher AUC, this would come at the expense of computational power and interpretability. Hence, we decided on using this final model for our submission.
